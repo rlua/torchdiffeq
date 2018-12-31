@@ -6,7 +6,9 @@ This `examples` directory contains cleaned up code regarding the usage of adapti
 The following files contain an implementation of learning the parameters of toy models from physics and biology:
 
 `ode_LV.py` - Fitting the two parameters of the Lotka-Volterra equations.
+
 `ode_Lorenz.py` - Fitting the three parameters of the Lorenz model.
+
 `ode_CP.py` - Fitting the npendulums+1 parameters of a nonlinear coupled pendulums model
 
 
