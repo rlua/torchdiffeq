@@ -2,6 +2,15 @@
 
 This `examples` directory contains cleaned up code regarding the usage of adaptive ODE solvers in machine learning. The scripts in this directory assume that `torchdiffeq` is installed following instructions from the main directory.
 
+## Toy models ported from ode2rnn
+The following files contain an implementation of learning the parameters of toy models from physics and biology:
+
+`ode_LV.py` - Fitting the two parameters of the Lotka-Volterra equations.
+`ode_Lorenz.py` - Fitting the three parameters of the Lorenz model.
+`ode_CP.py` - Fitting the npendulums+1 parameters of a nonlinear coupled pendulums model
+
+
+
 ## Demo
 The `ode_demo.py` file contains a short implementation of learning a dynamics model to mimic a spiral ODE.
 
