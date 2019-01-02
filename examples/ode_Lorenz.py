@@ -48,7 +48,7 @@ class Lambda(nn.Module):
 
 
 with torch.no_grad():
-    true_y = odeint(Lambda(), true_y0, t, method='dopri5')
+    true_y = odeint(Lambda(), true_y0, t, method=args.method)
 
 
 def get_batch():
@@ -191,7 +191,7 @@ if __name__ == '__main__':
     for itr in range(1, args.niters + 1):
         optimizer.zero_grad()
         batch_y0, batch_t, batch_y = get_batch()
-        pred_y = odeint(func, batch_y0.squeeze(), batch_t) #RCL had to call squeeze
+        pred_y = odeint(func, batch_y0.squeeze(), batch_t, method=args.method) #RCL had to call squeeze
         #loss = torch.mean(torch.abs(pred_y - batch_y))
         #RCL Modified loss function, use MSE instead of abs
         loss = lossfunc(pred_y,batch_y.squeeze()) #RCL Had to call squeeze
@@ -204,7 +204,7 @@ if __name__ == '__main__':
 
         if itr % args.test_freq == 0:
             with torch.no_grad():
-                pred_y = odeint(func, true_y0, t)
+                pred_y = odeint(func, true_y0, t, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
                 #RCL Use MSE instead of abs
                 loss=lossfunc(pred_y,true_y)
