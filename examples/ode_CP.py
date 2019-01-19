@@ -18,12 +18,18 @@ parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--adjoint', action='store_true')
 parser.add_argument('--npendulums', type=int, default=3) #RCL added new option
+parser.add_argument('--npendulums_truth', type=int, default=3) #RCL added new option
 args = parser.parse_args()
 
+assert args.npendulums <= args.npendulums_truth, 'npendulums in the model must not be greater than in the ground truth'
+
 #RCL
+N_truth_=args.npendulums_truth
+N2_truth_=2*N_truth_
 N_=args.npendulums
 N2_=2*N_
-print('Number of pendulums and state variables:', N_, N2_)
+print('Number of pendulums and state variables in the model:', N_, N2_)
+print('Number of pendulums and state variables in the ground truth:', N_truth_, N2_truth_)
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
@@ -33,8 +39,8 @@ else:
 device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
 
 #RCL
-init = [0.0]*N2_
-for i in range(N_):
+init = [0.0]*N2_truth_
+for i in range(N_truth_):
     if i % 10 == 0:  # This was the default initial condition
         init[2 * i] = 0.5
 true_y0=torch.tensor([init])
@@ -71,7 +77,7 @@ k_groundtruth = [  8.92867921,   9.71355317,  10.17317032,   9.77653158,
      9.28963387,   9.04412782,   8.11297509,  10.57329466]
 
 feed={'rho':4.0}
-for i in range(N_):
+for i in range(N_truth_):
     var_name='k%d' % (i+1)
     feed[var_name]=k_groundtruth[i]
 
@@ -81,11 +87,11 @@ class Lambda(nn.Module):
         #RCL
         x=y.t()
         dx = torch.zeros_like(x)
-        for i in range(N_):
+        for i in range(N_truth_):
             ipos=2*i #index into x of coordinate
             ivel=ipos+1 #index into x of velocity
-            iposnext=(ipos+2)%N2_
-            iposprev=(ipos-2)%N2_
+            iposnext=(ipos+2)%N2_truth_
+            iposprev=(ipos-2)%N2_truth_
             dx[ipos]=x[ivel]
             dx[ivel]=-feed['k%d'%(i+1)]*torch.sin(x[ipos])-feed['rho']*(2*x[ipos]-x[iposnext]-x[iposprev])
 
@@ -110,6 +116,7 @@ def makedirs(dirname):
 
 if args.viz:
     makedirs('png')
+    #makedirs('eps')
     import matplotlib.pyplot as plt
     fig = plt.figure(figsize=(8, 4), facecolor='white')
     ax_traj = fig.add_subplot(121, frameon=False)
@@ -125,23 +132,24 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_traj.cla()
         ax_traj.set_title('Trajectories')
         ax_traj.set_xlabel('t')
-        ax_traj.set_ylabel('x,v')
+        ax_traj.set_ylabel(r'$\phi$,$\dot{\phi}}$')
         ax_traj.plot(t.numpy(), true_y.numpy()[:, 0, 0], t.numpy(), true_y.numpy()[:, 0, 1], 'g-')
         ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
         ax_traj.set_xlim(t.min(), t.max())
         #RCL Modified limits for CP
         ax_traj.set_ylim(-2, 2)
-        ax_traj.legend()
+        ax_traj.legend([r'$\phi(t)$ ground truth',r'$\dot{\phi}(t)$ ground truth',r'$\phi(t)$ fit',r'$\dot{\phi}(t)$ fit'])
 
         ax_phase.cla()
         ax_phase.set_title('Phase Portrait')
-        ax_phase.set_xlabel('x')
-        ax_phase.set_ylabel('v')
+        ax_phase.set_xlabel(r'$\phi(t)$')
+        ax_phase.set_ylabel(r'$\dot{\phi}(t)$')
         ax_phase.plot(true_y.numpy()[:, 0, 0], true_y.numpy()[:, 0, 1], 'g-')
         ax_phase.plot(pred_y.numpy()[:, 0, 0], pred_y.numpy()[:, 0, 1], 'b--')
         #RCL Modified limits for CP
         ax_phase.set_xlim(-0.5, 0.5)
         ax_phase.set_ylim(-2, 2)
+        ax_phase.legend(['ground truth','fit'])
 
         #RCL Commented out vector field plotting
         # ax_vecfield.cla()
@@ -163,6 +171,7 @@ def visualize(true_y, pred_y, odefunc, itr):
 
         fig.tight_layout()
         plt.savefig('png/{:03d}'.format(itr))
+        #plt.savefig('eps/{:03d}.eps'.format(itr),format='eps')
         plt.draw()
         plt.pause(0.01)
 
