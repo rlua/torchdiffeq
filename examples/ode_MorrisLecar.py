@@ -58,8 +58,6 @@ t = torch.linspace(0., 80., args.data_size)
 class Lambda(nn.Module):
 
     def forward(self, t, y):
-        #I am not going to use the argument "t" here,
-        #instead alotting another state and another differential equation to describe t.
         #RCL
         x=y.t()
         dx = torch.zeros_like(x)
@@ -82,11 +80,36 @@ class Lambda(nn.Module):
 with torch.no_grad():
     true_y = odeint(Lambda(), true_y0, t, method=args.method)
 
+#Add noise to observations
+noise_dist = torch.distributions.normal.Normal(0, 1.0)
+noise_shape = torch.Size([true_y.size()[0], true_y.size()[1], true_y.size()[2]])
+noise_samples = noise_dist.sample(sample_shape=noise_shape)
+true_y = true_y + noise_samples
 
 def get_batch():
     s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time), args.batch_size, replace=False))
     batch_y0 = true_y[s]  # (M, D)
     batch_t = t[:args.batch_time]  # (T)
+    batch_y = torch.stack([true_y[s + i] for i in range(args.batch_time)], dim=0)  # (T, M, D)
+    return batch_y0, batch_t, batch_y
+
+#RCL When states are partially observed, only initial values of observed states can be used
+def get_batch_partialObs(idx, pred_y):
+    '''
+    :param idx: indices of observed states
+    :param pred_y: simulated state trajectory using current parameter estimates
+    :return:
+    '''
+    s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time), args.batch_size, replace=False))
+    #Use initial conditions from simulated trajectory. This avoids using any information from ground truth (including unobserved states)
+    batch_y0 = pred_y[s]  # (M, 1, D)
+    #print(batch_y0)
+    #batch_y0[:,:,idx] = true_y[s][:,:,idx]
+    #print(batch_y0)
+    batch_t = t[:args.batch_time]  # (T)
+    #RCL The unobserved states from ground truth at the first batch timepoint must be replaced also.
+    #RCL On second thought, it is OK to leave the unobserved states in true_y, as these won't be included when
+    #computing the loss
     batch_y = torch.stack([true_y[s + i] for i in range(args.batch_time)], dim=0)  # (T, M, D)
     return batch_y0, batch_t, batch_y
 
@@ -166,7 +189,8 @@ class ODEFunc(nn.Module):
         for k, v in feed.items():
             if k in ['tau_w']:
             #if k in ['g1','g2','gL','tau_w']:
-                self.feed[k]=torch.nn.Parameter(0.5*torch.tensor(v,dtype=torch.float))
+            #if k in ['g1', 'g2', 'gL', 'tau_w','V1','V2','VL']:
+                self.feed[k]=torch.nn.Parameter(1.5*torch.tensor(v,dtype=torch.float))
                 self.register_parameter(k,self.feed[k])
             else:
                 self.feed[k] = torch.tensor(v,dtype=torch.float)
@@ -216,6 +240,7 @@ if __name__ == '__main__':
     #RCL
     #optimizer = optim.RMSprop(func.feed.values(), lr=1e-2)
     optimizer = optim.Adam(func.parameters(), lr=1.5e-1)
+    #optimizer = optim.LBFGS(func.parameters(), lr=2e-1)
     end = time.time()
 
     time_meter = RunningAverageMeter(0.97)
@@ -228,16 +253,33 @@ if __name__ == '__main__':
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,mode='min',patience=100,verbose=True)
 
     for itr in range(1, args.niters + 1):
+        with torch.no_grad():
+            pred_y_notbatch = odeint(func, true_y0, t, method=args.method)
+            #batch_y0, batch_t, batch_y = get_batch()
+            batch_y0, batch_t, batch_y = get_batch_partialObs([0],pred_y_notbatch)
         optimizer.zero_grad()
-        batch_y0, batch_t, batch_y = get_batch()
         pred_y = odeint(func, batch_y0.squeeze(), batch_t, method=args.method) #RCL had to call squeeze
         #print(pred_y, batch_y)
         #loss = torch.mean(torch.abs(pred_y - batch_y))
         #RCL Modified loss function, use MSE instead of abs
-        loss = lossfunc(pred_y,batch_y.squeeze()) #RCL Had to call squeeze
+        #Use membrane potential only, slice and get 0-component of state
+        loss = lossfunc(pred_y[:,:,0],batch_y.squeeze()[:,:,0]) #RCL Had to call squeeze
         #print(func.feed,pred_y.requires_grad)
         loss.backward()
-        optimizer.step()
+
+        #RCL Experiment with LBFGS
+        #https: // pytorch.org / docs / stable / optim.html
+        def closure():
+            optimizer.zero_grad()
+            #output = model(input)
+            pred_y_ = odeint(func, batch_y0.squeeze(), batch_t, method=args.method)
+            #loss = loss_fn(output, target)
+            loss_ = lossfunc(pred_y_[:,:,0], batch_y.squeeze()[:,:,0])
+            loss_.backward()
+            return loss_
+
+        optimizer.step() #Use for Adam
+        #optimizer.step(closure) #Use for LBFGS
 
         #RCL
         #scheduler.step(loss)
