@@ -11,6 +11,9 @@ The following files contain an implementation of learning the parameters of toy 
 
 `ode_CP.py` - Fitting the npendulums+1 parameters of a nonlinear coupled pendulums model
 
+`ode_MorrisLecar.py` - Fitting the parameters of the Morris-Lecar model, a system of ODEs used to describe membrane potential
+dynamics in barnacle muscle fibers.
+
 
 
 ## Demo
