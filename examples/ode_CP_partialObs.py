@@ -7,13 +7,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-parser = argparse.ArgumentParser('ODE demo')
+parser = argparse.ArgumentParser(description='ODE demo Coupled Pendulums with partial observations, random parameter initialization, noise, penalties on negative parameters, MAPE calculation')
 parser.add_argument('--method', type=str, choices=['rk4', 'dopri5', 'adams'], default='rk4') #RCL modified default
 parser.add_argument('--data_size', type=int, default=201) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=20) #RCL modified default
 parser.add_argument('--batch_size', type=int, default=10) #RCL modified default
 parser.add_argument('--niters', type=int, default=100)
-parser.add_argument('--test_freq', type=int, default=20) #RCL modified default
+parser.add_argument('--test_freq', type=int, default=1) #RCL modified default
 parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--adjoint', action='store_true')
@@ -445,7 +445,7 @@ class RunningAverageMeter(object):
         self.val = val
 
 
-#RCL
+#RCL penalize negative parameter values by augmenting the loss
 def lossParameterOutofBounds(paramfeed):
     constraint_factor=1000 #1 seems better than 1000, at least for 10 pendulums
     loss=torch.tensor(0,dtype=torch.float)
@@ -465,7 +465,7 @@ def calcMAPE(paramfeed, truefeed):
 def saveParameters(paramfeed):
     bestparams={}
     for k,v in paramfeed.items():
-        bestparams[k]=v.detach().data.item()
+        bestparams[k]=v.item()
     return bestparams
 
 
@@ -496,7 +496,6 @@ if __name__ == '__main__':
     lossfunc = nn.MSELoss()
 
     min_loss = 1e10
-    #"Best" in terms of training loss (using batch)
     best_params = None
     best_iter = None
     best_MAPE = None
@@ -518,14 +517,14 @@ if __name__ == '__main__':
         loss += lossParameterOutofBounds(func.feed)
         loss.backward()
         #RCL
-        lossval = loss.detach().numpy()
-        if lossval<min_loss:
-            #Use the training batch loss instead of Total Loss ("lossfunc(pred_y,true_y)") because this was used in the paper and maintain continuity with previous work
-            #Using Total Loss probably better
-            min_loss=lossval
-            best_params = saveParameters(func.feed)
-            best_iter = itr - 1
-            best_MAPE = calcMAPE(func.feed,feed)
+        trainlossval = loss.item()
+        #if trainlossval<min_loss:
+        #    #Use the training batch loss instead of Total Loss ("lossfunc(pred_y,true_y)") because this was used in the paper and maintain continuity with previous work
+        #    #Using Total Loss probably better
+        #    min_loss=trainlossval
+        #    best_params = saveParameters(func.feed)
+        #    best_iter = itr - 1
+        #    best_MAPE = calcMAPE(func.feed,feed)
 
         optimizer.step()
 
@@ -537,13 +536,21 @@ if __name__ == '__main__':
                 #loss = torch.mean(torch.abs(pred_y - true_y))
                 #RCL Use MSE instead of abs
                 loss=lossfunc(pred_y,true_y)+lossParameterOutofBounds(func.feed)
+                totallossval=loss.item()
                 avgm = calcMAPE(func.feed,feed)
-                print('Iter {:04d} | Total Loss {:.6f} | MAPE {:.6f}'.format(itr, loss.item(), avgm))
+                print('Iter {:04d} | Total Loss {:.6f} | Train Loss Before Optimizer Update {:.6f} | MAPE {:.6f}'.format(itr, totallossval, trainlossval, avgm))
                 visualize(true_y, pred_y, func, ii)
                 ii += 1
+                if totallossval<min_loss:
+                    min_loss=totallossval
+                    best_params = saveParameters(func.feed)
+                    best_iter = itr
+                    best_MAPE = avgm
 
         ##end = time.time()
         #print("Time Per Iteration: ", time.time() - end)
+
+
     print("TOTAL TIME: ", time.time() - end1)
 
     #Print Seed: 100, Loss: 0.002408005530014634, MAPE: XX, Iter: 99, Init: {'k1': 3.7224637319738574, ... }. Best: {...},

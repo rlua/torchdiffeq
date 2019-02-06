@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-parser = argparse.ArgumentParser('ODE demo')
+parser = argparse.ArgumentParser(description='ODE demo Lotka-Volterra')
 parser.add_argument('--method', type=str, choices=['rk4', 'dopri5', 'adams'], default='rk4') #RCL modified default
 parser.add_argument('--data_size', type=int, default=201) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=20) #RCL modified default

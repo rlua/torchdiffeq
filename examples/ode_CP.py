@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-parser = argparse.ArgumentParser('ODE demo')
+parser = argparse.ArgumentParser(description='ODE demo Coupled Pendulums')
 parser.add_argument('--method', type=str, choices=['rk4', 'dopri5', 'adams'], default='rk4') #RCL modified default
 parser.add_argument('--data_size', type=int, default=201) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=20) #RCL modified default
@@ -314,18 +314,18 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_traj.cla()
         ax_traj.set_title('Trajectories')
         ax_traj.set_xlabel('t')
-        ax_traj.set_ylabel(r'$\phi$,$\dot{\phi}}$')
+        ax_traj.set_ylabel(r'$\phi$,$v$')
         ax_traj.plot(t.numpy(), true_y.numpy()[:, 0, 0], t.numpy(), true_y.numpy()[:, 0, 1], 'g-')
         ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
         ax_traj.set_xlim(t.min(), t.max())
         #RCL Modified limits for CP
         ax_traj.set_ylim(-2, 2)
-        ax_traj.legend([r'$\phi(t)$ ground truth',r'$\dot{\phi}(t)$ ground truth',r'$\phi(t)$ fit',r'$\dot{\phi}(t)$ fit'])
+        ax_traj.legend([r'$\phi(t)$ ground truth',r'$v(t)$ ground truth',r'$\phi(t)$ fit',r'$v(t)$ fit'])
 
         ax_phase.cla()
         ax_phase.set_title('Phase Portrait')
         ax_phase.set_xlabel(r'$\phi(t)$')
-        ax_phase.set_ylabel(r'$\dot{\phi}(t)$')
+        ax_phase.set_ylabel(r'$v(t)$')
         ax_phase.plot(true_y.numpy()[:, 0, 0], true_y.numpy()[:, 0, 1], 'g-')
         ax_phase.plot(pred_y.numpy()[:, 0, 0], pred_y.numpy()[:, 0, 1], 'b--')
         #RCL Modified limits for CP
