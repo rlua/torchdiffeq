@@ -488,7 +488,7 @@ if __name__ == '__main__':
     #Index for sampling partial observability
     #RCL Seed this and make the fraction of observed a parameter
     # and select randomly without replacement
-    #idx = np.random.randint(2*args.npendulums, size=args.npendulums) #randint is without replacement
+    #idx = np.random.randint(2*args.npendulums, size=args.npendulums) #randint is with replacement
     np.random.seed(0)
     idx = np.random.choice(N2_, size=args.nstatesobserved, replace=False)  #This is without replacement
     print('Random states selected as observed', idx)
