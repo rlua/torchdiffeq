@@ -17,6 +17,9 @@ parser.add_argument('--test_freq', type=int, default=10) #RCL modified default
 parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--adjoint', action='store_true')
+parser.add_argument('--lbfgs', action='store_true')
+
+
 args = parser.parse_args()
 
 if args.adjoint:
@@ -48,7 +51,9 @@ feed = {
     # 'tau_w': 1/0.04,
     'tau_w': 1 / (1 / 15.0),
 
-    'I': 40}
+    'I': 40 #This creates 2 spikes
+    #'I': 42 #This would create 3 spikes, all else the same
+}
 
 #RCL
 init=[-30.0,0]
@@ -69,7 +74,6 @@ class Lambda(nn.Module):
         m = 1.0/(1+torch.exp(2*(feed['u1']-x[0])/feed['u2']))
         wst = 1.0/(1+torch.exp(2*(feed['u3']-x[0])/feed['u4']))
 
-        #tau = self.params['tau_w']/np.cosh((x[0]-self.params['u3'])/(2*self.params['u4']))
         tau = feed['tau_w']/torch.cosh((x[0]-feed['u3'])/(2*feed['u4']))
 
         dx[0] = -feed['g1']*m*(x[0]-feed['V1']) -feed['g2']*x[1]*(x[0]-feed['V2']) -feed['gL']*(x[0]-feed['VL']) + feed['I']
@@ -239,8 +243,11 @@ if __name__ == '__main__':
     func = ODEFunc()
     #RCL
     #optimizer = optim.RMSprop(func.feed.values(), lr=1e-2)
-    optimizer = optim.Adam(func.parameters(), lr=1.5e-1)
-    #optimizer = optim.LBFGS(func.parameters(), lr=2e-1)
+    #optimizer = optim.Adam(func.parameters(), lr=1.5e-1)
+    if args.lbfgs:
+        optimizer = optim.LBFGS(func.parameters(), lr=2e-2)
+    else:
+        optimizer = optim.Adam(func.parameters(), lr=1.5e-1)
     end = time.time()
 
     time_meter = RunningAverageMeter(0.97)
@@ -264,7 +271,6 @@ if __name__ == '__main__':
         #RCL Modified loss function, use MSE instead of abs
         #Use membrane potential only, slice and get 0-component of state
         loss = lossfunc(pred_y[:,:,0],batch_y.squeeze()[:,:,0]) #RCL Had to call squeeze
-        #print(func.feed,pred_y.requires_grad)
         loss.backward()
 
         #RCL Experiment with LBFGS
@@ -278,8 +284,10 @@ if __name__ == '__main__':
             loss_.backward()
             return loss_
 
-        optimizer.step() #Use for Adam
-        #optimizer.step(closure) #Use for LBFGS
+        if args.lbfgs:
+            optimizer.step(closure)  # Use for LBFGS
+        else:
+            optimizer.step() #Use for Adam
 
         #RCL
         #scheduler.step(loss)
