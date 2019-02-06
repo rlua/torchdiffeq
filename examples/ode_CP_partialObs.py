@@ -398,7 +398,6 @@ class ODEFunc(nn.Module):
         np.random.seed(randomseed_initialparams)
         self.feed={}
         for k, v in feed.items():
-            print(k)
             m = False
             while m == False:
                 multiplier = float(np.random.lognormal(0, 0.5, 1))
@@ -408,7 +407,7 @@ class ODEFunc(nn.Module):
                     m = True
             self.feed[k]=nn.Parameter(multiplier*torch.tensor(v))
             self.register_parameter(k,self.feed[k])
-        print(self.feed)
+
         #for v in self.feed.values():
         #    v.requires_grad_()
 
@@ -469,14 +468,15 @@ def saveParameters(paramfeed):
         bestparams[k]=v.detach().data.item()
     return bestparams
 
-min_loss = 1e10
-best_params = None
 
 if __name__ == '__main__':
 
     ii = 0
     end1 = time.time()
     func = ODEFunc(args.randomseed_initialparams)
+    #RCL Save initial parameter values
+    init_params = saveParameters(func.feed)
+
     # RCL
     #optimizer = optim.RMSprop(func.parameters(), lr=1e-3)
     #optimizer = optim.RMSprop(func.feed.values(), lr=1e-2)
@@ -495,12 +495,18 @@ if __name__ == '__main__':
     #RCL Use MSE instead of abs
     lossfunc = nn.MSELoss()
 
+    min_loss = 1e10
+    #"Best" in terms of training loss (using batch)
+    best_params = None
+    best_iter = None
+    best_MAPE = None
+
     for itr in range(1, args.niters + 1):
         end = time.time()
         #RCL
         with torch.no_grad():
             pred_y_notbatch = odeint(func, true_y0, t, method=args.method)
-            #batch_y0, batch_t, batch_y = get_batch()
+            #batch_y0, batch_t, batch_y = get_batch() #This one uses the ground truth of all states for initial values, so not appropriate when observations are partial
             batch_y0, batch_t, batch_y = get_batch_partialObs(idx,pred_y_notbatch)
         optimizer.zero_grad()
         #batch_y0, batch_t, batch_y = get_batch()
@@ -514,8 +520,13 @@ if __name__ == '__main__':
         #RCL
         lossval = loss.detach().numpy()
         if lossval<min_loss:
+            #Use the training batch loss instead of Total Loss ("lossfunc(pred_y,true_y)") because this was used in the paper and maintain continuity with previous work
+            #Using Total Loss probably better
             min_loss=lossval
-            bestparams = saveParameters(func.feed)
+            best_params = saveParameters(func.feed)
+            best_iter = itr - 1
+            best_MAPE = calcMAPE(func.feed,feed)
+
         optimizer.step()
 
         time_meter.update(time.time() - end)
@@ -535,5 +546,5 @@ if __name__ == '__main__':
         #print("Time Per Iteration: ", time.time() - end)
     print("TOTAL TIME: ", time.time() - end1)
 
-    #TODO print Seed: 100, Loss: 0.002408005530014634, Iter: 99, MAPE: XX, Init: {'k1': 3.7224637319738574, ... }. Best: {...},
-    print(min_loss, calcMAPE(func.feed,feed), bestparams)
+    #Print Seed: 100, Loss: 0.002408005530014634, MAPE: XX, Iter: 99, Init: {'k1': 3.7224637319738574, ... }. Best: {...},
+    print('Seed:',args.randomseed_initialparams,'Loss:', min_loss, 'MAPE:', best_MAPE, 'Iter:', best_iter, 'Init:', init_params, 'Best:', best_params)
