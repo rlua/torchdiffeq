@@ -24,6 +24,7 @@ args = parser.parse_args()
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
+    print('Running in adjoint mode (CAM)')
 else:
     from torchdiffeq import odeint
 
