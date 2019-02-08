@@ -314,9 +314,7 @@ def get_batch_partialObs(idx, pred_y):
     s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time), args.batch_size, replace=False))
     #Use initial conditions from simulated trajectory. This avoids using any information from ground truth (including unobserved states)
     batch_y0 = pred_y[s]  # (M, 1, D)
-    #print(batch_y0)
     batch_y0[:,:,idx] = true_y[s][:,:,idx] #Uncomment this to initialize batches using combination of states from simulated and ground truths
-    #print(batch_y0)
     batch_t = t[:args.batch_time]  # (T)
     #RCL The unobserved states from ground truth at the first batch timepoint must be replaced also.
     #RCL On second thought, it is OK to leave the unobserved states in true_y, as these won't be included when
