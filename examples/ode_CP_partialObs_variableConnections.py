@@ -7,30 +7,29 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-parser = argparse.ArgumentParser(description='ODE demo Coupled Pendulums')
+parser = argparse.ArgumentParser(description='ODE demo Coupled Pendulums with partial observations, random parameter initialization, noise, penalties on negative parameters, MAPE calculation, find best parameter estimates using total loss.')
 parser.add_argument('--method', type=str, choices=['rk4', 'dopri5', 'adams'], default='rk4') #RCL modified default
 parser.add_argument('--data_size', type=int, default=201) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=20) #RCL modified default
 parser.add_argument('--batch_size', type=int, default=10) #RCL modified default
-parser.add_argument('--niters', type=int, default=1000)
-parser.add_argument('--test_freq', type=int, default=10) #RCL modified default
+parser.add_argument('--niters', type=int, default=100)
+parser.add_argument('--test_freq', type=int, default=1) #RCL modified default
 parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--adjoint', action='store_true')
-parser.add_argument('--npendulums', type=int, default=3) #RCL added new option
-parser.add_argument('--npendulums_truth', type=int, default=3) #RCL added new option
+parser.add_argument('--npendulums', type=int, default=4) #RCL added new option
+parser.add_argument('--nstatesobserved', type=int, default=8) #RCL added new option
+parser.add_argument('--randomseed_initialparams', type=int, default=0) #RCL added new option
+parser.add_argument('--position_noise_stddev', type=float, default=0) #RCL added new option
+parser.add_argument('--velocity_noise_stddev', type=float, default=0) #RCL added new option
 args = parser.parse_args()
 
-assert args.npendulums_truth <= 1000, 'npendulums in the model must not be greater 1000'
-assert args.npendulums <= args.npendulums_truth, 'npendulums in the model must not be greater than in the ground truth'
-
 #RCL
-N_truth_=args.npendulums_truth
-N2_truth_=2*N_truth_
+assert args.npendulums <= 1000, 'npendulums in the model must not be greater 1000'
 N_=args.npendulums
 N2_=2*N_
-print('Number of pendulums and state variables in the model:', N_, N2_)
-print('Number of pendulums and state variables in the ground truth:', N_truth_, N2_truth_)
+print('Number of pendulums and state variables:', N_, N2_)
+print('Number of observable states during training:', args.nstatesobserved)
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
@@ -41,8 +40,8 @@ else:
 device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 'cpu')
 
 #RCL
-init = [0.0]*N2_truth_
-for i in range(N_truth_):
+init = [0.0]*N2_
+for i in range(N_):
     if i % 10 == 0:  # This was the default initial condition
         init[2 * i] = 0.5
 true_y0=torch.tensor([init])
@@ -259,10 +258,13 @@ k_groundtruth = [  8.92867921,   9.71355317,  10.17317032,   9.77653158,
    12.03504499, 11.53486159, 8.39741477, 8.60731311, 9.54110448,
    9.75653925, 10.7141879, 8.77554357, 10.20227057, 10.5160801]
 
-feed={'rho':4.0}
-for i in range(N_truth_):
+#feed={'rho':4.0}
+feed={}
+for i in range(N_):
     var_name='k%d' % (i+1)
     feed[var_name]=k_groundtruth[i]
+    rho_name = 'r%d' % (i + 1)
+    feed[rho_name]=4.0
 print('Number of parameters:',len(feed))
 
 class Lambda(nn.Module):
@@ -271,18 +273,38 @@ class Lambda(nn.Module):
         #RCL
         x=y.t()
         dx = torch.zeros_like(x)
-        for i in range(N_truth_):
+        for i in range(N_):
             ipos=2*i #index into x of coordinate
             ivel=ipos+1 #index into x of velocity
-            iposnext=(ipos+2)%N2_truth_
-            iposprev=(ipos-2)%N2_truth_
+            iposnext=(ipos+2)%N2_
+            iposprev=(ipos-2)%N2_
             dx[ipos]=x[ivel]
-            dx[ivel]=-feed['k%d'%(i+1)]*torch.sin(x[ipos])-feed['rho']*(2*x[ipos]-x[iposnext]-x[iposprev])
+            #dx[ivel]=-feed['k%d'%(i+1)]*torch.sin(x[ipos])-feed['rho']*(2*x[ipos]-x[iposnext]-x[iposprev])
+            #Make r (rhos) different
+            iprev=i
+            if i==0:
+                iprev=N_
+            dx[ivel] = -feed['k%d' % (i + 1)] * torch.sin(x[ipos]) \
+                       -feed['r%d'%(i+1)] * (x[ipos] - x[iposnext]) \
+                       -feed['r%d'%iprev] * (x[ipos] - x[iposprev])
 
         return dx.t()
 
 with torch.no_grad():
     true_y = odeint(Lambda(), true_y0, t, method=args.method)
+
+#RCL Set an explicit seed for noise for reproducibility
+torch.manual_seed(0)
+m = torch.distributions.normal.Normal(0, args.position_noise_stddev)
+m1 = torch.distributions.normal.Normal(0, args.velocity_noise_stddev)
+#Add noise to observations
+#print(true_y.size()[0], type(true_y.size()[0]))
+h = torch.Size([true_y.size()[0], true_y.size()[1], int(true_y.size()[2]/2)])
+h1 = torch.Size([true_y.size()[0], true_y.size()[1], true_y.size()[2]])
+samples_1 = m.sample(sample_shape=h)
+samples_2 = m1.sample(sample_shape=h1)
+samples_2[:,:,:-1:2] = samples_1
+true_y = true_y + samples_2
 
 
 def get_batch():
@@ -293,6 +315,25 @@ def get_batch():
     return batch_y0, batch_t, batch_y
 
 
+#RCL When states are partially observed, only initial values of observed states can be used
+def get_batch_partialObs(idx, pred_y):
+    '''
+    :param idx: indices of observed states
+    :param pred_y: simulated state trajectory using current parameter estimates
+    :return:
+    '''
+    s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time), args.batch_size, replace=False))
+    #Use initial conditions from simulated trajectory. This avoids using any information from ground truth (including unobserved states)
+    batch_y0 = pred_y[s]  # (M, 1, D)
+    batch_y0[:,:,idx] = true_y[s][:,:,idx] #Uncomment this to initialize batches using combination of states from simulated and ground truths
+    batch_t = t[:args.batch_time]  # (T)
+    #RCL The unobserved states from ground truth at the first batch timepoint must be replaced also.
+    #RCL On second thought, it is OK to leave the unobserved states in true_y, as these won't be included when
+    #computing the loss
+    batch_y = torch.stack([true_y[s + i] for i in range(args.batch_time)], dim=0)  # (T, M, 1, D)
+    return batch_y0, batch_t, batch_y
+
+
 def makedirs(dirname):
     if not os.path.exists(dirname):
         os.makedirs(dirname)
@@ -300,7 +341,6 @@ def makedirs(dirname):
 
 if args.viz:
     makedirs('png')
-    #makedirs('eps')
     import matplotlib.pyplot as plt
     fig = plt.figure(figsize=(8, 4), facecolor='white')
     ax_traj = fig.add_subplot(121, frameon=False)
@@ -355,22 +395,30 @@ def visualize(true_y, pred_y, odefunc, itr):
 
         fig.tight_layout()
         plt.savefig('png/{:03d}'.format(itr))
-        #plt.savefig('eps/{:03d}.eps'.format(itr),format='eps')
         plt.draw()
         plt.pause(0.01)
 
 
 class ODEFunc(nn.Module):
 
-    def __init__(self):
+    def __init__(self, randomseed_initialparams):
         super(ODEFunc, self).__init__()
 
         #RCL
+        np.random.seed(randomseed_initialparams)
         self.feed={}
-        #RCL Initial parameter values set to half the ground truth (from global feed)
         for k, v in feed.items():
-            self.feed[k]=torch.nn.Parameter(0.5*torch.tensor(v))
+            m = False
+            while m == False:
+                multiplier = float(np.random.lognormal(0, 0.5, 1))
+                if 1.5 <= multiplier <=2.5:
+                    m = True
+                elif 0 < multiplier <= 0.6:
+                    m = True
+            #multiplier=1.1 #Testing
+            self.feed[k]=nn.Parameter(multiplier*torch.tensor(v))
             self.register_parameter(k,self.feed[k])
+
         #for v in self.feed.values():
         #    v.requires_grad_()
 
@@ -385,8 +433,13 @@ class ODEFunc(nn.Module):
             iposnext=(ipos+2)%N2_
             iposprev=(ipos-2)%N2_
             dx[ipos]=x[ivel]
-            dx[ivel]=-self.feed['k%d'%(i+1)]*torch.sin(x[ipos])-self.feed['rho']*(2*x[ipos]-x[iposnext]-x[iposprev])
-
+            #dx[ivel]=-self.feed['k%d'%(i+1)]*torch.sin(x[ipos])-self.feed['rho']*(2*x[ipos]-x[iposnext]-x[iposprev])
+            iprev=i
+            if i==0:
+                iprev=N_
+            dx[ivel] = -self.feed['k%d' % (i + 1)] * torch.sin(x[ipos])  \
+                       -self.feed['r%d'%(i+1)] * (x[ipos] - x[iposnext]) \
+                       -self.feed['r%d'%iprev] * (x[ipos] - x[iposprev])
         return dx.t()
 
 class RunningAverageMeter(object):
@@ -408,48 +461,116 @@ class RunningAverageMeter(object):
         self.val = val
 
 
+#RCL penalize negative parameter values by augmenting the loss
+def lossParameterOutofBounds(paramfeed):
+    constraint_factor=1000 #1 seems better than 1000, at least for 10 pendulums
+    loss=torch.tensor(0,dtype=torch.float)
+    for k,v in paramfeed.items():
+        loss+=nn.functional.relu(-v)
+    return constraint_factor*loss
+
+def calcMAPE(paramfeed, truefeed):
+    compare = []
+    #diff = abs((float(paramfeed['rho'].data.numpy()) - truefeed['rho']) / truefeed['rho'])
+    #compare.append(diff)
+    for mm in range(N_):
+        diff = abs((float(paramfeed['k%d' % (mm + 1)].data.numpy()) - truefeed['k%d' % (mm + 1)]) / truefeed['k%d' % (mm + 1)])
+        compare.append(diff)
+        diff = abs((float(paramfeed['r%d' % (mm + 1)].data.numpy()) - truefeed['r%d' % (mm + 1)]) / truefeed['r%d' % (mm + 1)])
+        compare.append(diff)
+    return np.mean(compare)
+
+def saveParameters(paramfeed):
+    bestparams={}
+    for k,v in paramfeed.items():
+        bestparams[k]=v.item()
+    return bestparams
+
+
 if __name__ == '__main__':
 
     ii = 0
+    end1 = time.time()
+    func = ODEFunc(args.randomseed_initialparams)
+    #RCL Save initial parameter values
+    init_params = saveParameters(func.feed)
 
-    func = ODEFunc()
     # RCL
     #optimizer = optim.RMSprop(func.parameters(), lr=1e-3)
     #optimizer = optim.RMSprop(func.feed.values(), lr=1e-2)
-    optimizer = optim.Adam(func.parameters(), lr=1.0e-0)
+    optimizer = optim.Adam(func.parameters(), lr=1.0e-1)
     end = time.time()
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
-
+    #Index for sampling partial observability
+    #RCL Seed this and make the fraction of observed a parameter
+    # and select randomly without replacement
+    #idx = np.random.randint(2*args.npendulums, size=args.npendulums) #randint is with replacement
+    np.random.seed(0)
+    idx = np.random.choice(N2_, size=args.nstatesobserved, replace=False)  #This is without replacement
+    print('Random states selected as observed', idx)
     #RCL Use MSE instead of abs
-    lossfunc = torch.nn.MSELoss()
+    lossfunc = nn.MSELoss()
+
+    min_loss = 1e10
+    best_params = None
+    best_iter = None
+    best_MAPE = None
 
     for itr in range(1, args.niters + 1):
+        end = time.time()
+        #RCL
+        with torch.no_grad():
+            pred_y_notbatch = odeint(func, true_y0, t, method=args.method)
+            #batch_y0, batch_t, batch_y = get_batch() #This one uses the ground truth of all states for initial values, so not appropriate when observations are partial
+            batch_y0, batch_t, batch_y = get_batch_partialObs(idx,pred_y_notbatch)
         optimizer.zero_grad()
-        batch_y0, batch_t, batch_y = get_batch()
+        #batch_y0, batch_t, batch_y = get_batch()
         pred_y = odeint(func, batch_y0.squeeze(), batch_t, method=args.method) #RCL had to call squeeze
-        #print(pred_y, batch_y)
         #loss = torch.mean(torch.abs(pred_y - batch_y))
         #RCL Modified loss function, use MSE instead of abs
-        loss = lossfunc(pred_y,batch_y.squeeze()) #RCL Had to call squeeze
-        #print(func.feed,pred_y.requires_grad)
+        loss = lossfunc(pred_y[:,:,idx],batch_y.squeeze()[:,:,idx]) #RCL Had to call squeeze
+        #Add penalty for negative parameter values
+        loss += lossParameterOutofBounds(func.feed)
         loss.backward()
+        #RCL
+        trainlossval = loss.item()
+        #if trainlossval<min_loss:
+        #    #Use the training batch loss instead of Total Loss ("lossfunc(pred_y,true_y)") because this was used in the paper and maintain continuity with previous work
+        #    #Using Total Loss probably better
+        #    min_loss=trainlossval
+        #    best_params = saveParameters(func.feed)
+        #    best_iter = itr - 1
+        #    best_MAPE = calcMAPE(func.feed,feed)
+
         optimizer.step()
 
         time_meter.update(time.time() - end)
         loss_meter.update(loss.item())
-
         if itr % args.test_freq == 0:
             with torch.no_grad():
                 pred_y = odeint(func, true_y0, t, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
                 #RCL Use MSE instead of abs
-                loss=lossfunc(pred_y,true_y)
-                print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
+                loss=lossfunc(pred_y,true_y)+lossParameterOutofBounds(func.feed)
+                totallossval=loss.item()
+                avgm = calcMAPE(func.feed,feed)
+                print('Iter {:04d} | Total Loss {:.6f} | Train Loss Before Optimizer Update {:.6f} | MAPE {:.6f}'.format(itr, totallossval, trainlossval, avgm))
                 visualize(true_y, pred_y, func, ii)
-                #RCL
-                #print(func.feed)
                 ii += 1
+                if totallossval<min_loss:
+                    min_loss=totallossval
+                    best_params = saveParameters(func.feed)
+                    best_iter = itr
+                    best_MAPE = avgm
+                print(func.feed)
 
-        end = time.time()
+        ##end = time.time()
+        #print("Time Per Iteration: ", time.time() - end)
+
+
+    print("TOTAL TIME: ", time.time() - end1)
+
+    #Print Seed: 100, Loss: 0.002408005530014634, MAPE: XX, Iter: 99, Init: {'k1': 3.7224637319738574, ... }. Best: {...},
+    print('Seed:',args.randomseed_initialparams,'Loss:', min_loss, 'MAPE:', best_MAPE, 'Iter:', best_iter, 'Init:', init_params, 'Best:', best_params)

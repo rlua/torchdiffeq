@@ -29,7 +29,7 @@ assert args.npendulums <= 1000, 'npendulums in the model must not be greater 100
 N_=args.npendulums
 N2_=2*N_
 print('Number of pendulums and state variables:', N_, N2_)
-print('Number of observable states during training', args.nstatesobserved)
+print('Number of observable states during training:', args.nstatesobserved)
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
@@ -262,6 +262,7 @@ feed={'rho':4.0}
 for i in range(N_):
     var_name='k%d' % (i+1)
     feed[var_name]=k_groundtruth[i]
+print('Number of parameters:',len(feed))
 
 class Lambda(nn.Module):
 
