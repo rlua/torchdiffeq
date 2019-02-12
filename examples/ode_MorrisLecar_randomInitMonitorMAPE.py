@@ -12,12 +12,14 @@ parser.add_argument('--method', type=str, choices=['rk4', 'dopri5', 'adams'], de
 parser.add_argument('--data_size', type=int, default=801) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=40) #RCL modified default
 parser.add_argument('--batch_size', type=int, default=20) #RCL modified default
-parser.add_argument('--niters', type=int, default=100)
-parser.add_argument('--test_freq', type=int, default=10) #RCL modified default
+parser.add_argument('--niters', type=int, default=1000)
+parser.add_argument('--test_freq', type=int, default=1) #RCL modified default
 parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--adjoint', action='store_true')
-parser.add_argument('--lbfgs', action='store_true')
+parser.add_argument('--lbfgs', action='store_true') #RCL added new option
+parser.add_argument('--randomseed_initialparams', type=int, default=0) #RCL added new option
+parser.add_argument('--nspikes', type=int, default=2) #RCL added new option. Number of spikes sought in fit
 
 
 args = parser.parse_args()
@@ -52,8 +54,8 @@ feed = {
     # 'tau_w': 1/0.04,
     'tau_w': 1 / (1 / 15.0),
 
-    'I': 40 #This creates 2 spikes
-    #'I': 42 #This would create 3 spikes, all else the same (including t below)
+    #'I': 40 #This creates 2 spikes
+    'I': 42 #This would create 3 spikes, all else the same (including t below)
 }
 
 #RCL
@@ -85,6 +87,8 @@ class Lambda(nn.Module):
 with torch.no_grad():
     true_y = odeint(Lambda(), true_y0, t, method=args.method)
 
+#RCL Set an explicit seed for noise for reproducibility
+torch.manual_seed(0)
 #Add noise to observations
 noise_dist = torch.distributions.normal.Normal(0, 1.0)
 noise_shape = torch.Size([true_y.size()[0], true_y.size()[1], true_y.size()[2]])
@@ -115,7 +119,7 @@ def get_batch_partialObs(idx, pred_y):
     #RCL The unobserved states from ground truth at the first batch timepoint must be replaced also.
     #RCL On second thought, it is OK to leave the unobserved states in true_y, as these won't be included when
     #computing the loss
-    batch_y = torch.stack([true_y[s + i] for i in range(args.batch_time)], dim=0)  # (T, M, D)
+    batch_y = torch.stack([true_y[s + i] for i in range(args.batch_time)], dim=0)  # (T, M, 1, D)
     return batch_y0, batch_t, batch_y
 
 
@@ -186,16 +190,20 @@ def visualize(true_y, pred_y, odefunc, itr):
 
 class ODEFunc(nn.Module):
 
-    def __init__(self):
+    def __init__(self, randomseed_initialparams):
         super(ODEFunc, self).__init__()
 
         #RCL
+        np.random.seed(randomseed_initialparams)
+        init_values_rand = {'g1': np.random.uniform(3.6,4.4),
+                       'g2': np.random.uniform(1,25),
+                       'gL': np.random.uniform(0.1,10),
+                       'tau_w': np.random.uniform(5,25),
+                       }
         self.feed={}
         for k, v in feed.items():
-            if k in ['tau_w']:
-            #if k in ['g1','g2','gL','tau_w']:
-            #if k in ['g1', 'g2', 'gL', 'tau_w','V1','V2','VL']:
-                self.feed[k]=torch.nn.Parameter(1.5*torch.tensor(v,dtype=torch.float))
+            if k in ['g1','g2','gL','tau_w']:
+                self.feed[k]=torch.nn.Parameter(torch.tensor(init_values_rand[k],dtype=torch.float))
                 self.register_parameter(k,self.feed[k])
             else:
                 self.feed[k] = torch.tensor(v,dtype=torch.float)
@@ -237,11 +245,49 @@ class RunningAverageMeter(object):
         self.val = val
 
 
+#RCL penalize negative parameter values by augmenting the loss
+def lossParameterOutofBounds(paramfeed):
+    constraint_factor=1000 #1 seems better than 1000, at least for 10 pendulums
+    loss = torch.tensor(0,dtype=torch.float)
+    # g1 parameter bounds (see random initializations)
+    loss += nn.functional.relu(-1.0 * paramfeed['g1'] + 3.6) + nn.functional.relu(paramfeed['g1'] - 4.4)
+    # g2 parameter bounds (see random initializations)
+    loss += nn.functional.relu(-1.0 * paramfeed['g2'] + 1) + nn.functional.relu(paramfeed['g2'] - 25)
+    # gL parameter bounds (see random initializations)
+    loss += nn.functional.relu(-1.0 * paramfeed['gL'] + 0.1) + nn.functional.relu(paramfeed['gL'] - 10)
+    # tau_w parameter bounds (see random initializations)
+    loss += nn.functional.relu(-1.0 * paramfeed['tau_w'] + 5) + nn.functional.relu(paramfeed['tau_w'] - 25)
+    return constraint_factor*loss
+
+def calcMAPE(paramfeed, truefeed):
+    compare = []
+    for name in ['g1','g2','gL','tau_w']:
+        diff = abs((float(paramfeed[name].data.numpy()) - truefeed[name]) / truefeed[name])
+        compare.append(diff)
+    return np.mean(compare)
+
+def saveParameters(paramfeed):
+    bestparams={}
+    for name in ['g1','g2','gL','tau_w']:
+        bestparams[name] = paramfeed[name].item()
+    return bestparams
+
+#Simple spike counter (on membrane potential variable)
+def spikeCounter(pred_y):
+    spikecount=0
+    for i in range(pred_y.shape[0]-1):
+        if pred_y[i,0,0]<25.0 and pred_y[i+1,0,0]>25.0: #Upstroke
+            spikecount+=1
+    return spikecount
+
 if __name__ == '__main__':
 
     ii = 0
 
-    func = ODEFunc()
+    func = ODEFunc(args.randomseed_initialparams)
+    #RCL Save initial parameter values
+    init_params = saveParameters(func.feed)
+
     #RCL
     #optimizer = optim.RMSprop(func.feed.values(), lr=1e-2)
     #optimizer = optim.Adam(func.parameters(), lr=1.5e-1)
@@ -260,6 +306,11 @@ if __name__ == '__main__':
     #RCL
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,mode='min',patience=100,verbose=True)
 
+    min_loss = 1e10
+    best_params = None
+    best_iter = None
+    best_MAPE = None
+
     for itr in range(1, args.niters + 1):
         with torch.no_grad():
             pred_y_notbatch = odeint(func, true_y0, t, method=args.method)
@@ -272,7 +323,10 @@ if __name__ == '__main__':
         #RCL Modified loss function, use MSE instead of abs
         #Use membrane potential only, slice and get 0-component of state
         loss = lossfunc(pred_y[:,:,0],batch_y.squeeze()[:,:,0]) #RCL Had to call squeeze
+        #Add penalty for negative parameter values
+        loss += lossParameterOutofBounds(func.feed)
         loss.backward()
+        trainlossval = loss.item()
 
         #RCL Experiment with LBFGS
         #https: // pytorch.org / docs / stable / optim.html
@@ -301,8 +355,12 @@ if __name__ == '__main__':
                 pred_y = odeint(func, true_y0, t, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
                 #RCL Use MSE instead of abs
-                loss=lossfunc(pred_y,true_y)
-                print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
+                loss=lossfunc(pred_y[:,:,0],true_y[:,:,0])+lossParameterOutofBounds(func.feed)
+                totallossval=loss.item()
+                avgm = calcMAPE(func.feed,feed)
+                spikecount = spikeCounter(pred_y)
+                print('Iter {:04d} | Total Loss {:.6f} | Train Loss Before Optimizer Update {:.6f} | MAPE {:.6f} | Spikes {:d}'.format(itr, totallossval, trainlossval, avgm, spikecount))
+                #print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
                 visualize(true_y, pred_y, func, ii)
                 #RCL
                 #for param in func.parameters():
@@ -310,5 +368,16 @@ if __name__ == '__main__':
                 #for param_group in optimizer.param_groups:
                 #    print(param_group['lr'])
                 ii += 1
+                if totallossval<min_loss and spikecount==args.nspikes:
+                    min_loss = totallossval
+                    best_params = saveParameters(func.feed)
+                    best_iter = itr
+                    best_MAPE = avgm
+                #print(func.feed)
 
         end = time.time()
+
+    if best_params==None:
+        print('No fit with {:d} spikes found'.format(args.nspikes))
+    else:
+        print('Seed:',args.randomseed_initialparams,'Loss:', min_loss, 'MAPE:', best_MAPE, 'Iter:', best_iter, 'Init:', init_params, 'Best:', best_params)
