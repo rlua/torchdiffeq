@@ -7,21 +7,21 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-parser = argparse.ArgumentParser(description='ODE demo Lotka-Volterra')
-parser.add_argument('--method', type=str, choices=['rk4', 'dopri5', 'adams'], default='rk4') #RCL modified default
+parser = argparse.ArgumentParser('ODE demo')
+parser.add_argument('--method', type=str, choices=['rk4','dopri5', 'adams'], default='rk4')
 parser.add_argument('--data_size', type=int, default=201) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=20) #RCL modified default
 parser.add_argument('--batch_size', type=int, default=10) #RCL modified default
-parser.add_argument('--niters', type=int, default=100) #RCL modified default
-parser.add_argument('--test_freq', type=int, default=20)
+parser.add_argument('--niters', type=int, default=1000) #RCL modified default
+parser.add_argument('--test_freq', type=int, default=10) #RCL modified default
 parser.add_argument('--viz', action='store_true')
 parser.add_argument('--gpu', type=int, default=0)
-parser.add_argument('--adjoint', action='store_true') #RCL modified default
+parser.add_argument('--adjoint', action='store_true')
+parser.add_argument('--nhidden', type=int, default=50) #RCL Added new option
 args = parser.parse_args()
 
 if args.adjoint:
     from torchdiffeq import odeint_adjoint as odeint
-    print('Running in adjoint mode (CAM)')
 else:
     from torchdiffeq import odeint
 
@@ -30,6 +30,7 @@ device = torch.device('cuda:' + str(args.gpu) if torch.cuda.is_available() else 
 #RCL
 true_y0 = torch.tensor([[1., 0.5]])
 t = torch.linspace(0., 10., args.data_size)
+t_extend = torch.linspace(0., 20., 2*args.data_size)
 feed = {'alpha': 1.0, 'beta': 1.0, 'gamma': 2.0, 'delta': 1.0}
 
 
@@ -43,11 +44,19 @@ class Lambda(nn.Module):
         dx[1] = -feed['gamma']*x[1] + feed['delta']*x[0]*x[1]
         return dx.t()
 
-
 with torch.no_grad():
     true_y = odeint(Lambda(), true_y0, t, method=args.method)
+    true_y_extend = odeint(Lambda(), true_y0, t_extend, method=args.method)
 
+#RCL Set an explicit seed for noise for reproducibility
+torch.manual_seed(0)
+#Add noise to observations
+noise_dist = torch.distributions.normal.Normal(0, 0.2)
+noise_shape = torch.Size([true_y.size()[0], true_y.size()[1], true_y.size()[2]])
+noise_samples = noise_dist.sample(sample_shape=noise_shape)
+#true_y = true_y + noise_samples
 
+#np.random.seed(0) #RCL
 def get_batch():
     s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time), args.batch_size, replace=False))
     batch_y0 = true_y[s]  # (M, D)
@@ -79,9 +88,12 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_traj.set_title('Trajectories')
         ax_traj.set_xlabel('t')
         ax_traj.set_ylabel('x,y')
-        ax_traj.plot(t.numpy(), true_y.numpy()[:, 0, 0], t.numpy(), true_y.numpy()[:, 0, 1], 'g-')
-        ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
-        ax_traj.set_xlim(t.min(), t.max())
+        #ax_traj.plot(t.numpy(), true_y.numpy()[:, 0, 0], t.numpy(), true_y.numpy()[:, 0, 1], 'g-')
+        #ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
+        #ax_traj.set_xlim(t.min(), t.max())
+        ax_traj.plot(t_extend.numpy(), true_y.numpy()[:, 0, 0], t_extend.numpy(), true_y.numpy()[:, 0, 1], 'g-')
+        ax_traj.plot(t_extend.numpy(), pred_y.numpy()[:, 0, 0], '--', t_extend.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
+        ax_traj.set_xlim(t_extend.min(), t_extend.max())
         #RCL Modified limits for Lotka Volterra
         ax_traj.set_ylim(0, 4)
         ax_traj.legend()
@@ -118,40 +130,73 @@ def visualize(true_y, pred_y, odefunc, itr):
         plt.draw()
         plt.pause(0.01)
 
+def visualize_demo_orig(true_y, pred_y, odefunc, itr):
+
+    if args.viz:
+
+        ax_traj.cla()
+        ax_traj.set_title('Trajectories')
+        ax_traj.set_xlabel('t')
+        ax_traj.set_ylabel('x,y')
+        ax_traj.plot(t.numpy(), true_y.numpy()[:, 0, 0], t.numpy(), true_y.numpy()[:, 0, 1], 'g-')
+        ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
+        ax_traj.set_xlim(t.min(), t.max())
+        ax_traj.set_ylim(-2, 2)
+        ax_traj.legend()
+
+        ax_phase.cla()
+        ax_phase.set_title('Phase Portrait')
+        ax_phase.set_xlabel('x')
+        ax_phase.set_ylabel('y')
+        ax_phase.plot(true_y.numpy()[:, 0, 0], true_y.numpy()[:, 0, 1], 'g-')
+        ax_phase.plot(pred_y.numpy()[:, 0, 0], pred_y.numpy()[:, 0, 1], 'b--')
+        ax_phase.set_xlim(-2, 2)
+        ax_phase.set_ylim(-2, 2)
+
+        ax_vecfield.cla()
+        ax_vecfield.set_title('Learned Vector Field')
+        ax_vecfield.set_xlabel('x')
+        ax_vecfield.set_ylabel('y')
+
+        y, x = np.mgrid[-2:2:21j, -2:2:21j]
+        dydt = odefunc(0, torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 2))).cpu().detach().numpy()
+        mag = np.sqrt(dydt[:, 0]**2 + dydt[:, 1]**2).reshape(-1, 1)
+        dydt = (dydt / mag)
+        dydt = dydt.reshape(21, 21, 2)
+
+        ax_vecfield.streamplot(x, y, dydt[:, :, 0], dydt[:, :, 1], color="black")
+        ax_vecfield.set_xlim(-2, 2)
+        ax_vecfield.set_ylim(-2, 2)
+
+        fig.tight_layout()
+        plt.savefig('png/{:03d}'.format(itr))
+        plt.draw()
+        plt.pause(0.001)
+
 
 class ODEFunc(nn.Module):
 
     def __init__(self):
         super(ODEFunc, self).__init__()
 
-        #RCL Lotka-Volterra modification
-        #Set initial parameter values here
-        #self.feed={'alpha': 0.5*torch.tensor(feed['alpha']),
-        #     'beta': torch.tensor(feed['beta']),
-        #     'gamma': 0.5*torch.tensor(feed['gamma']),
-        #     'delta': torch.tensor(feed['delta'])}
-        #self.feed['alpha'].requires_grad_()
-        #self.feed['gamma'].requires_grad_()
+        print('Number of nodes in a hidden layer:',args.nhidden)
+        self.net = nn.Sequential(
+            nn.Linear(2, args.nhidden),
+            #nn.Tanh(),
+            nn.ReLU(), #RCL One layer nhidden 50,40,30,20,10 works. To a lesser extent 8,6,4 is close or getting there. 2 is not.
+            #nn.Linear(args.nhidden, args.nhidden),
+            #nn.Tanh(),
+            nn.Linear(args.nhidden, 2),
+        )
 
-        #RCL Initial parameter values set to half the ground truth (from global feed)
-        self.feed = {'alpha': torch.nn.Parameter(0.5*torch.tensor(feed['alpha'])),
-                     'beta': (torch.tensor(feed['beta'])),
-                     'gamma': torch.nn.Parameter(0.5*torch.tensor(feed['gamma'])),
-                     'delta': (torch.tensor(feed['delta']))}
-
-        #https://discuss.pytorch.org/t/nn-parameters-vs-nn-module-register-parameter/18641/2
-        self.register_parameter('alpha',self.feed['alpha'])
-        self.register_parameter('gamma',self.feed['gamma'])
-
+        torch.manual_seed(0) #RCL
+        for m in self.net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
 
     def forward(self, t, y):
-        #RCL Lotka-Volterra modification
-        #y may contain multiple batches, take the transpose
-        x=y.t()
-        dx = torch.zeros_like(x)
-        dx[0] = self.feed['alpha']*x[0] - self.feed['beta']*x[0]*x[1]
-        dx[1] = -self.feed['gamma']*x[1] + self.feed['delta']*x[0]*x[1]
-        return dx.t()
+        return self.net(y) #RCL modified
 
 
 class RunningAverageMeter(object):
@@ -178,44 +223,35 @@ if __name__ == '__main__':
     ii = 0
 
     func = ODEFunc()
-    #RCL Lotka-Volterra modification
+    #optimizer = optim.RMSprop(func.parameters(), lr=1e-3)
     #optimizer = optim.RMSprop(func.parameters(), lr=1e-2)
-    #optimizer = optim.RMSprop([func.feed['alpha'],func.feed['gamma']], lr=1e-2)
-    optimizer = optim.Adam(func.parameters(), lr=1e-1) #This one works too
+    optimizer = optim.Adam(func.parameters(), lr=1e-2)
     end = time.time()
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
 
-    #RCL Use MSE instead of abs
-    #lossfunc = torch.nn.MSELoss(reduction='elementwise_mean') #pytorch version 0.4.1, elementwise_mean is the default
     lossfunc = torch.nn.MSELoss()
 
     for itr in range(1, args.niters + 1):
         optimizer.zero_grad()
         batch_y0, batch_t, batch_y = get_batch()
-        pred_y = odeint(func, batch_y0.squeeze(), batch_t, method=args.method) #RCL had to call squeeze
+        pred_y = odeint(func, batch_y0, batch_t, method=args.method)
         #loss = torch.mean(torch.abs(pred_y - batch_y))
-        #RCL Modified loss function
-        loss = lossfunc(pred_y,batch_y.squeeze()) #RCL Had to call squeeze
-        #print(loss)
+        loss = lossfunc(pred_y, batch_y)
         loss.backward()
         optimizer.step()
-        #RCL
-        #print(func.feed)
 
         time_meter.update(time.time() - end)
         loss_meter.update(loss.item())
 
         if itr % args.test_freq == 0:
             with torch.no_grad():
-                pred_y = odeint(func, true_y0, t, method=args.method)
+                pred_y_extend = odeint(func, true_y0, t_extend, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
-                loss=lossfunc(pred_y,true_y)
+                loss = lossfunc(pred_y_extend, true_y_extend)
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
-                visualize(true_y, pred_y, func, ii)
-                #RCL
-                #print(func.feed)
+                visualize(true_y_extend, pred_y_extend, func, ii)
                 ii += 1
 
         end = time.time()
