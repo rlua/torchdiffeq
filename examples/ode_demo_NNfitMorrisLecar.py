@@ -51,7 +51,8 @@ feed = {
     'tau_w': 1 / (1 / 15.0),
 
     #'I': 40 #This creates 2 spikes
-    'I': 42 #This would create 3 spikes, all else the same (including t below)
+    #'I': 42 #This would create 3 spikes, all else the same (including t below)
+    'I':60 #4 spikes
 }
 
 #RCL
@@ -82,7 +83,7 @@ class Lambda(nn.Module):
 
 with torch.no_grad():
     true_y = odeint(Lambda(), true_y0, t, method=args.method)
-    #true_y[:,:, 0] /= true_y[:,:, 0].max()
+    true_y[:,:, 1] = true_y[:,:, 1]*true_y[:,:, 0].max()/true_y[:,:, 1].max() #Scale the w-state to be of the same magnitude as V
 
 np.random.seed(0) #RCL
 def get_batch():
@@ -129,14 +130,14 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_phase.plot(true_y.numpy()[:, 0, 0], true_y.numpy()[:, 0, 1], 'g-')
         ax_phase.plot(pred_y.numpy()[:, 0, 0], pred_y.numpy()[:, 0, 1], 'b--')
         ax_phase.set_xlim(-70, 70)
-        ax_phase.set_ylim(0, 1)
+        ax_phase.set_ylim(0, 70)
 
         ax_vecfield.cla()
         ax_vecfield.set_title('Learned Vector Field')
         ax_vecfield.set_xlabel('x')
         ax_vecfield.set_ylabel('y')
 
-        y, x = np.mgrid[0:1:21j, -70:70:21j]
+        y, x = np.mgrid[0:70:21j, -70:70:21j]
         dydt = odefunc(0, torch.Tensor(np.stack([x, y], -1).reshape(21 * 21, 2))).cpu().detach().numpy()
         mag = np.sqrt(dydt[:, 0]**2 + dydt[:, 1]**2).reshape(-1, 1)
         dydt = (dydt / mag)
@@ -144,7 +145,7 @@ def visualize(true_y, pred_y, odefunc, itr):
 
         ax_vecfield.streamplot(x, y, dydt[:, :, 0], dydt[:, :, 1], color="black")
         ax_vecfield.set_xlim(-70, 70)
-        ax_vecfield.set_ylim(0, 1)
+        ax_vecfield.set_ylim(0, 70)
 
         fig.tight_layout()
         plt.savefig('png/{:03d}'.format(itr))
@@ -157,12 +158,13 @@ class ODEFunc(nn.Module):
     def __init__(self):
         super(ODEFunc, self).__init__()
 
+        print('Number of nodes in a hidden layer:', args.nhidden)
         self.net = nn.Sequential(
             nn.Linear(2, args.nhidden),
             #nn.Tanh(),
             nn.ReLU(),
-            #nn.Linear(args.nhidden, args.nhidden),
-            #nn.Tanh(),
+            nn.Linear(args.nhidden, args.nhidden),
+            nn.ReLU(),
             nn.Linear(args.nhidden, 2),
         )
 
@@ -201,13 +203,15 @@ if __name__ == '__main__':
 
     func = ODEFunc()
     #optimizer = optim.RMSprop(func.parameters(), lr=1e-3)
-    optimizer = optim.Adam(func.parameters(), lr=1.5e-2)
+    optimizer = optim.Adam(func.parameters(), lr=1e-2)
     end = time.time()
 
     time_meter = RunningAverageMeter(0.97)
     loss_meter = RunningAverageMeter(0.97)
 
     lossfunc = torch.nn.MSELoss()
+
+    min_totalloss=1e10
 
     for itr in range(1, args.niters + 1):
         optimizer.zero_grad()
@@ -223,6 +227,8 @@ if __name__ == '__main__':
         loss_meter.update(loss.item())
 
         if itr % args.test_freq == 0:
+        #if itr == 1608:
+        #if itr==1978:
             with torch.no_grad():
                 pred_y = odeint(func, true_y0, t, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
@@ -230,5 +236,10 @@ if __name__ == '__main__':
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
                 visualize(true_y, pred_y, func, ii)
                 ii += 1
+                if loss.item() < min_totalloss:
+                    min_totalloss=loss.item()
+                    min_iter=itr
 
         end = time.time()
+
+    print('Minimum total loss {:.6f} at iter {:d}'.format(min_totalloss,min_iter))

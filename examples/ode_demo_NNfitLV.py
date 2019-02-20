@@ -56,7 +56,7 @@ noise_shape = torch.Size([true_y.size()[0], true_y.size()[1], true_y.size()[2]])
 noise_samples = noise_dist.sample(sample_shape=noise_shape)
 #true_y = true_y + noise_samples
 
-#np.random.seed(0) #RCL
+np.random.seed(0) #RCL
 def get_batch():
     s = torch.from_numpy(np.random.choice(np.arange(args.data_size - args.batch_time), args.batch_size, replace=False))
     batch_y0 = true_y[s]  # (M, D)
