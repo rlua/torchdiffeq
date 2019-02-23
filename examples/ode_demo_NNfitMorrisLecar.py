@@ -83,7 +83,15 @@ class Lambda(nn.Module):
 
 with torch.no_grad():
     true_y = odeint(Lambda(), true_y0, t, method=args.method)
-    true_y[:,:, 1] = true_y[:,:, 1]*true_y[:,:, 0].max()/true_y[:,:, 1].max() #Scale the w-state to be of the same magnitude as V
+    #true_y[:,:, 1] = true_y[:,:, 1]*true_y[:,:, 0].max()/true_y[:,:, 1].max() #Scale the w-state to be of the same magnitude as V
+
+#RCL Set an explicit seed for noise for reproducibility
+torch.manual_seed(0)
+#Add noise to observations
+noise_dist = torch.distributions.normal.Normal(0, 1.0)
+noise_shape = torch.Size([true_y.size()[0], true_y.size()[1], true_y.size()[2]])
+noise_samples = noise_dist.sample(sample_shape=noise_shape)
+#true_y = true_y + noise_samples
 
 np.random.seed(0) #RCL
 def get_batch():
@@ -121,7 +129,7 @@ def visualize(true_y, pred_y, odefunc, itr):
         ax_traj.plot(t.numpy(), pred_y.numpy()[:, 0, 0], '--', t.numpy(), pred_y.numpy()[:, 0, 1], 'b--')
         ax_traj.set_xlim(t.min(), t.max())
         ax_traj.set_ylim(-70, 70)
-        ax_traj.legend()
+        #ax_traj.legend()
 
         ax_phase.cla()
         ax_phase.set_title('Phase Portrait')
@@ -160,12 +168,19 @@ class ODEFunc(nn.Module):
 
         print('Number of nodes in a hidden layer:', args.nhidden)
         self.net = nn.Sequential(
+            #nn.Linear(2, 2),
             nn.Linear(2, args.nhidden),
             #nn.Tanh(),
             nn.ReLU(),
+
             nn.Linear(args.nhidden, args.nhidden),
             nn.ReLU(),
+
+            nn.Linear(args.nhidden, args.nhidden),
+            nn.ReLU(),
+
             nn.Linear(args.nhidden, 2),
+            #nn.Linear(2, 2),
         )
 
         torch.manual_seed(0) #RCL
@@ -173,9 +188,31 @@ class ODEFunc(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, mean=0, std=0.1)
                 nn.init.constant_(m.bias, val=0)
+                print(m.weight.shape)
+                #if m.weight.shape==(2,2):
+                #    m.weight[0,1].requires_grad=False
+                #    m.weight[1,0].requires_grad=False
+
+        #self.scale_in1=torch.nn.Parameter(torch.tensor(1.0))
+        #self.scale_in2 = torch.nn.Parameter(torch.tensor(1.0))
+        #self.scale_out1=torch.nn.Parameter(torch.tensor(1.0))
+        #self.scale_out2 = torch.nn.Parameter(torch.tensor(1.0))
+
+        #self.register_parameter('scale_in1', self.scale_in1)
+        #self.register_parameter('scale_in2', self.scale_in2)
+        #self.register_parameter('scale_out1', self.scale_out1)
+        #self.register_parameter('scale_out2', self.scale_out2)
 
     def forward(self, t, y):
-        return self.net(y) #RCL modified
+        return self.net(y)
+
+        # RCL modified
+        #x=y.transpose(-1,0)
+        #scale_in = torch.zeros_like(x)
+        #scale_in[0] = self.scale_in1*x[0]
+        #scale_in[1] = self.scale_in2*x[1]
+        #return self.net(scale_in.transpose(-1,0))
+
 
 
 class RunningAverageMeter(object):
@@ -229,6 +266,9 @@ if __name__ == '__main__':
         if itr % args.test_freq == 0:
         #if itr == 1608:
         #if itr==1978:
+        #if itr==980:
+        #if itr==756:
+        #if itr==731:
             with torch.no_grad():
                 pred_y = odeint(func, true_y0, t, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
@@ -239,6 +279,8 @@ if __name__ == '__main__':
                 if loss.item() < min_totalloss:
                     min_totalloss=loss.item()
                     min_iter=itr
+            #RCL temporary
+            #break
 
         end = time.time()
 
