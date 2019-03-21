@@ -13,6 +13,7 @@ parser.add_argument('--data_size', type=int, default=801) #RCL modified default
 parser.add_argument('--batch_time', type=int, default=40) #RCL modified default
 parser.add_argument('--batch_size', type=int, default=20) #RCL modified default
 parser.add_argument('--niters', type=int, default=1000) #RCL modified default
+parser.add_argument('--niters2', type=int, default=1000) #RCL modified default
 parser.add_argument('--test_freq', type=int, default=20)
 parser.add_argument('--test_freq2', type=int, default=10) #RCL Added new option
 parser.add_argument('--viz', action='store_true')
@@ -20,6 +21,7 @@ parser.add_argument('--gpu', type=int, default=0)
 parser.add_argument('--adjoint', action='store_true')
 parser.add_argument('--nhidden', type=int, default=50) #RCL Added new option
 parser.add_argument('--wscale', type=float, default=100) #RCL Added new option
+parser.add_argument('--loadSavedModelFromFile', action='store_true') #RCL Added new option
 #parser.add_argument('--lbfgs', action='store_true')
 args = parser.parse_args()
 
@@ -140,7 +142,7 @@ if args.viz:
     plt.show(block=False)
 
 
-def visualize(true_y, pred_y, odefunc, itr ,viz=args.viz):
+def visualize(true_y, pred_y, odefunc, itr ,viz=args.viz, filename=None):
 
     if viz:
 
@@ -179,7 +181,10 @@ def visualize(true_y, pred_y, odefunc, itr ,viz=args.viz):
         ax_vecfield.set_ylim(0, 70)
 
         fig.tight_layout()
-        plt.savefig('png/{:03d}'.format(itr))
+        if filename is None:
+            plt.savefig('png/{:03d}'.format(itr))
+        else:
+            plt.savefig('png/{}'.format(filename))
         plt.draw()
         plt.pause(0.001)
 
@@ -199,8 +204,8 @@ class ODEFunc(nn.Module):
             nn.Linear(args.nhidden, args.nhidden),
             nn.ReLU(),
 
-            #nn.Linear(args.nhidden, args.nhidden),
-            #nn.ReLU(),
+            nn.Linear(args.nhidden, args.nhidden),
+            nn.ReLU(),
 
             nn.Linear(args.nhidden, 2),
             #nn.Linear(2, 2),
@@ -292,11 +297,6 @@ if __name__ == '__main__':
         loss_meter.update(loss.item())
 
         if itr % args.test_freq == 0:
-        #if itr == 1608:
-        #if itr==1978:
-        #if itr==980:
-        #if itr==756:
-        #if itr==731:
             with torch.no_grad():
                 pred_y = odeint(func, true_y0, t, method=args.method)
                 #loss = torch.mean(torch.abs(pred_y - true_y))
@@ -315,14 +315,27 @@ if __name__ == '__main__':
 
     print('Minimum total loss {:.6f} at iter {:d}'.format(min_totalloss,min_iter))
 
+    #filename = 'MorrisLecar_SavedNNModel_TwoHiddenLayers'
+    filename = 'MorrisLecar_SavedNNModel_ThreeHiddenLayers'
+    if args.loadSavedModelFromFile:
+        print('Loading model from file {}'.format(filename))
+        SavedNNModel.load_state_dict(torch.load(filename))
+    else:
+        print('Saving best NN model to file {}'.format(filename))
+        torch.save(SavedNNModel.state_dict(), filename)
 
 #Part two of fitting
+print('Begin fitting f_TrueModel to f_NN')
 # Export the NN model
 # Fit the true model to the NN, by evaluating the MSE between NN-forward and TrueModel-forward at V,w values
 # found in the ground truth
+# Explore:
+#  1. Use other solvers for the second fitting step (Scipy)
+#  2. For NN, use a hybrid model, e.g. use dw/dt from true model.
+#  3. Is f_NN(x) sensitive to dt?
 # Pitfalls:
 #  1. No noise in data yet
-#  2. Unobserved w-state is being used to train the NN (not in the loss function, but in initializing the minibatches
+#  2. Unobserved w-state is being used to train the NN (not in the loss function, but in initializing the minibatches)
 
 class TrueODEFunc(nn.Module):
 
@@ -332,10 +345,10 @@ class TrueODEFunc(nn.Module):
         #RCL
         self.feed={}
         for k, v in feed.items():
-            if k in ['tau_w']:
-            #if k in ['g1','g2','gL','tau_w']:
+            #if k in ['tau_w']:
+            if k in ['g1','g2','gL','tau_w']:
             #if k in ['g1', 'g2', 'gL', 'tau_w','V1','V2','VL']:
-                self.feed[k]=torch.nn.Parameter(1.0*torch.tensor(v,dtype=torch.float))
+                self.feed[k]=torch.nn.Parameter(0.1*torch.tensor(v,dtype=torch.float))
                 self.register_parameter(k,self.feed[k])
             else:
                 self.feed[k] = torch.tensor(v,dtype=torch.float)
@@ -359,6 +372,63 @@ class TrueODEFunc(nn.Module):
         return dx.t()
 
 
+#https://matplotlib.org/mpl_toolkits/mplot3d/tutorial.html
+def plot_surface_3d_demo(model1,model2):
+    '''
+    ======================
+    3D surface (color map)
+    ======================
+
+    Demonstrates plotting a 3D surface colored with the coolwarm color map.
+    The surface is made opaque by using antialiased=False.
+
+    Also demonstrates using the LinearLocator and custom formatting for the
+    z axis tick labels.
+    '''
+
+    from mpl_toolkits.mplot3d import Axes3D
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+    from matplotlib.ticker import LinearLocator, FormatStrFormatter
+    import numpy as np
+
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+
+    # Make data.
+    X = np.arange(-60, 60, 1)
+    #Y = np.arange(-60, 60, 1)
+    Y = np.arange(0, 40, 1)
+    X, Y = np.meshgrid(X, Y)
+
+    #R = np.sqrt(X ** 2 + Y ** 2)
+    #Z = np.sin(R.numpy())
+    Z1 = np.zeros_like(X)
+    Z2 = np.zeros_like(X)
+    with torch.no_grad():
+        for i in range(X.shape[0]):
+            for j in range(X.shape[1]):
+                Z1[i,j]=model1.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,0].numpy()
+                Z2[i,j]=model2.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,0].numpy()
+                #Z1[i,j]=model1.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,1].numpy()
+                #Z2[i,j]=model2.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,1].numpy()
+
+    # Plot the surface.
+    surf1 = ax.plot_surface(X, Y, Z1, color='red', #cmap=cm.coolwarm,
+                           linewidth=0, antialiased=False)
+    surf2 = ax.plot_surface(X, Y, Z2, color='blue', #cmap=cm.coolwarm,
+                           linewidth=0, antialiased=False)
+    # Customize the z axis.
+    ax.set_zlim(Z1.min(), Z1.max())
+    ax.zaxis.set_major_locator(LinearLocator(10))
+    ax.zaxis.set_major_formatter(FormatStrFormatter('%.02f'))
+
+    # Add a color bar which maps values to colors.
+    #fig.colorbar(surf1, shrink=0.5, aspect=5)
+    #fig.colorbar(surf2, shrink=0.5, aspect=5)
+
+    plt.show()
+
 if __name__ == '__main__':
 
     TrueModel = TrueODEFunc()
@@ -381,10 +451,11 @@ if __name__ == '__main__':
     #RCL
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,mode='min',patience=100,verbose=True)
 
-    for itr in range(1, args.niters + 1):
+    for itr in range(1, args.niters2 + 1):
         optimizer.zero_grad()
         NNf=torch.zeros([t.size()[0],2])
         Truef=torch.zeros([t.size()[0],2])
+        #TODO Try to do some batching?
         for i in range(t.size()[0]):
             #print(NNf[i].shape,func.forward(0,true_y[i,0].view(1,-1)).shape,TrueModel.forward(0,true_y[i,0].view(1,-1)).shape)
             NNf[i]=SavedNNModel.forward(0,true_y[i,0].view(1,-1))
@@ -405,7 +476,15 @@ if __name__ == '__main__':
                 #RCL Use MSE instead of abs
                 loss=lossfunc(pred_y1,pred_y2)
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
-                visualize(pred_y1, pred_y2, TrueModel, ii, viz=True)
+                #visualize(pred_y1, pred_y2, TrueModel, ii, viz=True)
+                if itr == 1:
+                    visualize(pred_y1, pred_y2, TrueModel, ii, viz=True, filename='MorrisLecar_Start_TrueModelFit.png')
+                    print(TrueModel.feed)
+                    #plot_surface_3d_demo(SavedNNModel, TrueModel)
+                elif itr == args.niters2:
+                    visualize(pred_y1, pred_y2, TrueModel, ii, viz=True, filename='MorrisLecar_Final_TrueModelFit.png')
+                    print(TrueModel.feed)
+                    plot_surface_3d_demo(SavedNNModel, TrueModel)
                 ii += 1
 
         end = time.time()

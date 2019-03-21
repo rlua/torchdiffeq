@@ -296,6 +296,8 @@ def plot_surface_3d_demo(model1,model2):
             for j in range(X.shape[1]):
                 Z1[i,j]=model1.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,0].numpy()
                 Z2[i,j]=model2.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,0].numpy()
+                #Z1[i,j]=model1.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,1].numpy()
+                #Z2[i,j]=model2.forward(0,torch.tensor([[X[i,j],Y[i,j]]],dtype=torch.float))[0,1].numpy()
 
     # Plot the surface.
     surf1 = ax.plot_surface(X, Y, Z1, color='red', #cmap=cm.coolwarm,
@@ -351,11 +353,11 @@ if __name__ == '__main__':
                 if itr==1:
                     visualize(pred_y1, pred_y2, TrueModel, ii, viz=True, filename='LV_Start_TrueModelFit.png')
                     print(TrueModel.feed)
-                    #plot_surface_3d_demo(func, TrueModel)
+                    #plot_surface_3d_demo(SavedNNModel, TrueModel)
                 elif itr==args.niters:
                     visualize(pred_y1, pred_y2, TrueModel, ii, viz=True, filename='LV_Final_TrueModelFit.png')
                     print(TrueModel.feed)
-                    plot_surface_3d_demo(func, TrueModel)
+                    plot_surface_3d_demo(SavedNNModel, TrueModel)
                 ii += 1
 
         end = time.time()
