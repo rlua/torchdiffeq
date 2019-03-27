@@ -289,7 +289,7 @@ if __name__ == '__main__':
         pred_y = odeint(func, batch_y0, batch_t, method=args.method)
         #loss = torch.mean(torch.abs(pred_y - batch_y))
         #loss = torch.mean(torch.abs(pred_y[:,:,0] - batch_y[:,:,0])) #RCL Train on membrane potential
-        loss = lossfunc(pred_y[:,:,0],batch_y[:,:,0]) #RCL Train on membrane potential
+        loss = lossfunc(pred_y[:,:,:,0],batch_y[:,:,:,0]) #RCL Train on membrane potential
         loss.backward()
         optimizer.step()
 
@@ -316,7 +316,7 @@ if __name__ == '__main__':
     print('Minimum total loss {:.6f} at iter {:d}'.format(min_totalloss,min_iter))
 
     #filename = 'MorrisLecar_SavedNNModel_TwoHiddenLayers'
-    filename = 'MorrisLecar_SavedNNModel_ThreeHiddenLayers'
+    filename = 'MorrisLecar_SavedNNModel_ThreeHiddenLayers_1'
     if args.loadSavedModelFromFile:
         print('Loading model from file {}'.format(filename))
         SavedNNModel.load_state_dict(torch.load(filename))
@@ -348,7 +348,7 @@ class TrueODEFunc(nn.Module):
             #if k in ['tau_w']:
             if k in ['g1','g2','gL','tau_w']:
             #if k in ['g1', 'g2', 'gL', 'tau_w','V1','V2','VL']:
-                self.feed[k]=torch.nn.Parameter(0.1*torch.tensor(v,dtype=torch.float))
+                self.feed[k]=torch.nn.Parameter(0.5*torch.tensor(v,dtype=torch.float))
                 self.register_parameter(k,self.feed[k])
             else:
                 self.feed[k] = torch.tensor(v,dtype=torch.float)
@@ -477,7 +477,7 @@ if __name__ == '__main__':
                 loss=lossfunc(pred_y1,pred_y2)
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
                 #visualize(pred_y1, pred_y2, TrueModel, ii, viz=True)
-                if itr == 1:
+                if itr >= 1:
                     visualize(pred_y1, pred_y2, TrueModel, ii, viz=True, filename='MorrisLecar_Start_TrueModelFit.png')
                     print(TrueModel.feed)
                     #plot_surface_3d_demo(SavedNNModel, TrueModel)
