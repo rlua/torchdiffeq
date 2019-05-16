@@ -414,24 +414,6 @@ class ODEFunc(nn.Module):
 
         return dx.t()
 
-class RunningAverageMeter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self, momentum=0.99):
-        self.momentum = momentum
-        self.reset()
-
-    def reset(self):
-        self.val = None
-        self.avg = 0
-
-    def update(self, val):
-        if self.val is None:
-            self.avg = val
-        else:
-            self.avg = self.avg * self.momentum + val * (1 - self.momentum)
-        self.val = val
-
 
 def CustomWeightedLoss(pred,true):
 
@@ -451,15 +433,12 @@ if __name__ == '__main__':
     #optimizer = optim.RMSprop(func.feed.values(), lr=1e-2)
     #optimizer = optim.Adam(func.parameters(), lr=1.5e-1)
     if args.lbfgs:
-        optimizer = optim.LBFGS(func.parameters(), lr=2e-2)
+        optimizer = optim.LBFGS(func.parameters(), lr=2e-1)
     else:
         #optimizer = optim.Adam(func.parameters(), lr=1.5e-2)
         #optimizer = optim.SGD(func.parameters(), lr=1e-6)
         optimizer = optim.SGD(func.parameters(), lr=1e-6)
     end = time.time()
-
-    time_meter = RunningAverageMeter(0.97)
-    loss_meter = RunningAverageMeter(0.97)
 
     lossfunc = torch.nn.MSELoss()
 
@@ -518,37 +497,49 @@ if __name__ == '__main__':
         # init_state_flip[0,2] = func.n0_flip
         # print('Initial state of flip:',init_state_flip)
 
-        pred_y_sub = odeint(func, init_state, t_sub, method=args.method)
-        #loss = lossfunc(pred_y_sub[:, :, 0], true_y_sub[:, :, 0])
-        loss = CustomWeightedLoss(pred_y_sub[:, :, 0],true_y_sub[:, :, 0])
-        #penalize negative values of auxiliary variables
-        loss += 10000*(torch.nn.functional.relu(-func.h0)+torch.nn.functional.relu(-func.n0))
-        #enforce periodicity in the auxiliary variables from one peak to the next
-        loss += 80 * ((func.h0-pred_y_sub[-1,0,1])**2 + (func.n0-pred_y_sub[-1,0,2])**2)
+        if not args.lbfgs:
+            pred_y_sub = odeint(func, init_state, t_sub, method=args.method)
+            #loss = lossfunc(pred_y_sub[:, :, 0], true_y_sub[:, :, 0])
+            loss = CustomWeightedLoss(pred_y_sub[:, :, 0],true_y_sub[:, :, 0])
+            #penalize negative values of auxiliary variables
+            loss += 10000*(torch.nn.functional.relu(-func.h0)+torch.nn.functional.relu(-func.n0))
+            #enforce periodicity in the auxiliary variables from one peak to the next
+            loss += 80 * ((func.h0-pred_y_sub[-1,0,1])**2 + (func.n0-pred_y_sub[-1,0,2])**2)
 
-        #pred_y_sub_1 = odeint(func, init_state_1, t_sub[imid:], method=args.method)
-        #loss += CustomWeightedLoss(pred_y_sub_1[:, :, 0], true_y_sub[imid:, :, 0])
-        #loss += 10000 * (torch.nn.functional.relu(-func.h0_1) + torch.nn.functional.relu(-func.n0_1))
+            #pred_y_sub_1 = odeint(func, init_state_1, t_sub[imid:], method=args.method)
+            #loss += CustomWeightedLoss(pred_y_sub_1[:, :, 0], true_y_sub[imid:, :, 0])
+            #loss += 10000 * (torch.nn.functional.relu(-func.h0_1) + torch.nn.functional.relu(-func.n0_1))
 
-        #pred_y_sub_2 = odeint(func, init_state_2, t_sub[imid2:], method=args.method)
-        #loss += lossfunc(pred_y_sub_2[:, :, 0], true_y_sub[imid2:, :, 0])
+            #pred_y_sub_2 = odeint(func, init_state_2, t_sub[imid2:], method=args.method)
+            #loss += lossfunc(pred_y_sub_2[:, :, 0], true_y_sub[imid2:, :, 0])
 
-        #Use t_sub instead of t_sub_flip, ode's are time independent anyway
-        #pred_y_flip = odeint(func, init_state_flip, t_sub, method=args.method)
-        #loss = lossfunc(pred_y_flip[:, :, 0], true_y_sub_flip[:, :, 0])
+            #Use t_sub instead of t_sub_flip, ode's are time independent anyway
+            #pred_y_flip = odeint(func, init_state_flip, t_sub, method=args.method)
+            #loss = lossfunc(pred_y_flip[:, :, 0], true_y_sub_flip[:, :, 0])
 
-        loss.backward()
+            loss.backward()
 
         #RCL Experiment with LBFGS
         #https: // pytorch.org / docs / stable / optim.html
         def closure():
             optimizer.zero_grad()
-            #output = model(input)
-            pred_y_ = odeint(func, batch_y0.squeeze(), batch_t, method=args.method)
-            #loss = loss_fn(output, target)
-            loss_ = lossfunc(pred_y_[:,:,0], batch_y.squeeze()[:,:,0])
-            loss_.backward()
-            return loss_
+
+            init_state = torch.tensor([[0, 0, 0]], dtype=torch.float)
+            init_state[0, 0] = true_y_sub[0, 0, 0]
+            init_state[0, 1] = func.h0
+            init_state[0, 2] = func.n0
+            #print('Initial state 0:', init_state)
+
+            pred_y_sub = odeint(func, init_state, t_sub, method=args.method)
+            # loss = lossfunc(pred_y_sub[:, :, 0], true_y_sub[:, :, 0])
+            loss = CustomWeightedLoss(pred_y_sub[:, :, 0], true_y_sub[:, :, 0])
+            # penalize negative values of auxiliary variables
+            loss += 10000 * (torch.nn.functional.relu(-func.h0) + torch.nn.functional.relu(-func.n0))
+            # enforce periodicity in the auxiliary variables from one peak to the next
+            loss += 80 * ((func.h0 - pred_y_sub[-1, 0, 1]) ** 2 + (func.n0 - pred_y_sub[-1, 0, 2]) ** 2)
+
+            loss.backward()
+            return loss
 
         if args.lbfgs:
             optimizer.step(closure)  # Use for LBFGS
@@ -558,23 +549,25 @@ if __name__ == '__main__':
         #RCL
         #scheduler.step(loss)
 
-        time_meter.update(time.time() - end)
-        loss_meter.update(loss.item())
-
         if itr % args.test_freq == 0:
             with torch.no_grad():
                 #pred_y = odeint(func, true_y0, t, method=args.method)
-                pred_y = odeint(func, init_state, t[i1:], method=args.method)
                 #loss=lossfunc(pred_y,true_y[i1:])
+                init_state = torch.tensor([[0, 0, 0]], dtype=torch.float)
+                init_state[0, 0] = true_y_sub[0, 0, 0]
+                init_state[0, 1] = func.h0
+                init_state[0, 2] = func.n0
+                pred_y = odeint(func, init_state, t[i1:], method=args.method)
                 #pred_y_sub = odeint(func, init_state, t_sub, method=args.method)
-                loss = lossfunc(pred_y_sub[:, :, 0], true_y_sub[:, :, 0])
+                #loss = lossfunc(pred_y_sub[:, :, 0], true_y_sub[:, :, 0])
+                loss = lossfunc(pred_y[:, :, 0], true_y[i1:, :, 0])
                 print('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
-                visualize(true_y[i1:], pred_y, t[i1:], func, ii)
+                #visualize(true_y[i1:], pred_y, t[i1:], func, ii)
                 #visualize(true_y_sub, pred_y_sub, t[i1:], func, ii)
+                visualize(true_y[i1:], pred_y, t[i1:], func, ii)
                 #for param in func.parameters():
                 #    print(param.grad)
                 #for param_group in optimizer.param_groups:
                 #    print(param_group['lr'])
                 ii += 1
 
-        end = time.time()
